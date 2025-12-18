@@ -22,6 +22,7 @@ export class PrioritizationService {
     try {
       const prompt = this.buildUrgencyPrompt(input);
 
+      this.logger.log('🤖 Calling OpenAI GPT-4 for urgency analysis...');
       const response = await openai().chat.completions.create({
         model: 'gpt-4-turbo-preview',
         messages: [
@@ -60,12 +61,12 @@ export class PrioritizationService {
       }
 
       this.logger.log(
-        `Calculated urgency score: ${result.urgency_score} for feedback`,
+        `✅ OpenAI returned urgency score: ${result.urgency_score}`,
       );
 
       return result;
     } catch (error) {
-      this.logger.error('Error calculating urgency with OpenAI', error);
+      this.logger.error('❌ Error calculating urgency with OpenAI, using fallback', error.message);
       // Fallback to rule-based calculation
       return this.fallbackUrgencyCalculation(input);
     }
@@ -151,6 +152,7 @@ OUTPUT FORMAT (JSON only, no other text):
   private fallbackUrgencyCalculation(
     input: UrgencyAnalysisInput,
   ): UrgencyAnalysisResult {
+    this.logger.warn('⚠️  Using fallback rule-based scoring (OpenAI unavailable)');
     let score = 0;
     const reasons: string[] = [];
 

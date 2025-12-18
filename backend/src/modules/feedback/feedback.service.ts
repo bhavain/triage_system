@@ -179,7 +179,7 @@ export class FeedbackService {
       queryBuilder = queryBuilder.lte('created_at', query.date_to);
     }
     if (query.search) {
-      queryBuilder = queryBuilder.textSearch('content', query.search);
+      queryBuilder = queryBuilder.ilike('content', `%${query.search}%`);
     }
 
     // Apply customer tier filter through join
@@ -349,41 +349,47 @@ export class FeedbackService {
     content: string,
     categoryId?: number,
   ): Promise<number> {
-    // Extract keywords for matching
-    const keywords = content
-      .toLowerCase()
-      .split(/\s+/)
-      .filter((word) => word.length > 4)
-      .slice(0, 5);
+    try {
+      // Extract keywords for matching
+      const keywords = content
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((word) => word.length > 4)
+        .slice(0, 3); // Use top 3 keywords
 
-    if (keywords.length === 0) {
-      return 1;
-    }
+      if (keywords.length === 0) {
+        return 1;
+      }
 
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    let query = this.supabase
-      .from('feedback')
-      .select('id', { count: 'exact', head: true })
-      .gte('created_at', thirtyDaysAgo.toISOString());
+      // For each keyword, count matches and use the highest count
+      let maxCount = 0;
 
-    if (categoryId) {
-      query = query.eq('category_id', categoryId);
-    }
+      for (const keyword of keywords) {
+        let query = this.supabase
+          .from('feedback')
+          .select('id', { count: 'exact', head: true })
+          .gte('created_at', thirtyDaysAgo.toISOString())
+          .ilike('content', `%${keyword}%`);
 
-    // Use text search for keyword matching
-    const searchQuery = keywords.join(' | ');
-    query = query.textSearch('content', searchQuery);
+        if (categoryId) {
+          query = query.eq('category_id', categoryId);
+        }
 
-    const { count, error } = await query;
+        const { count, error } = await query;
 
-    if (error) {
+        if (!error && count && count > maxCount) {
+          maxCount = count;
+        }
+      }
+
+      return maxCount + 1; // +1 for the current feedback
+    } catch (error) {
       this.logger.warn('Error counting similar feedback', error);
       return 1;
     }
-
-    return (count || 0) + 1; // +1 for the current feedback
   }
 
   /**
@@ -395,39 +401,45 @@ export class FeedbackService {
     excludeId?: string,
     limit: number = 5,
   ): Promise<any[]> {
-    const keywords = content
-      .toLowerCase()
-      .split(/\s+/)
-      .filter((word) => word.length > 4)
-      .slice(0, 5);
+    try {
+      const keywords = content
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((word) => word.length > 4)
+        .slice(0, 3);
 
-    if (keywords.length === 0) {
-      return [];
-    }
+      if (keywords.length === 0) {
+        return [];
+      }
 
-    let query = this.supabase
-      .from('feedback')
-      .select('id, content, created_at, customer:customers(tier)');
+      // Use the first keyword to find similar items
+      let query = this.supabase
+        .from('feedback')
+        .select('id, content, created_at, customer:customers(tier)')
+        .ilike('content', `%${keywords[0]}%`);
 
-    if (categoryId) {
-      query = query.eq('category_id', categoryId);
-    }
+      if (categoryId) {
+        query = query.eq('category_id', categoryId);
+      }
 
-    if (excludeId) {
-      query = query.neq('id', excludeId);
-    }
+      if (excludeId) {
+        query = query.neq('id', excludeId);
+      }
 
-    const searchQuery = keywords.join(' | ');
-    query = query.textSearch('content', searchQuery).limit(limit);
+      query = query.limit(limit);
 
-    const { data, error } = await query;
+      const { data, error } = await query;
 
-    if (error) {
+      if (error) {
+        this.logger.warn('Error fetching similar feedback', error);
+        return [];
+      }
+
+      return data || [];
+    } catch (error) {
       this.logger.warn('Error fetching similar feedback', error);
       return [];
     }
-
-    return data || [];
   }
 
   /**

@@ -74,7 +74,7 @@ export interface UrgentQueueResponse {
     content: string;
     urgency_score: number;
     urgency_reasoning: string;
-    category: string;
+    category: string | Category;
     customer_tier: string;
     frequency_count: number;
     created_at: string;
