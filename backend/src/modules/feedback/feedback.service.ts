@@ -9,10 +9,18 @@ import {
   Sentiment,
   PaginationMeta,
   ApiResponse,
+  UrgencyAnalysisResult,
+  FeedbackSource,
 } from '../../common/interfaces/feedback.interface';
 import { PrioritizationService } from '../prioritization/prioritization.service';
 import { CategorizationService } from '../prioritization/categorization.service';
-import { CreateFeedbackItemDto } from './dto/create-feedback.dto';
+import {
+  CreateFeedbackItemDto,
+  SupportTicketDto,
+  NPSSurveyDto,
+  AppStoreReviewDto,
+  SocialMentionDto,
+} from './dto/create-feedback.dto';
 import { QueryFeedbackDto } from './dto/query-feedback.dto';
 import { UpdateFeedbackDto } from './dto/update-feedback.dto';
 
@@ -27,35 +35,218 @@ export class FeedbackService {
   ) {}
 
   /**
-   * Create multiple feedback items in batch
+   * Create multiple feedback items in batch using staged pipeline
+   * This is optimized for production-level batch ingestion
+   * Accepts items in different payload shapes and normalizes them internally
    */
-  async createBatch(items: CreateFeedbackItemDto[]): Promise<{
+  async createBatch(items: any[]): Promise<{
     success: boolean;
     ingested_count: number;
     failed_count: number;
     feedback_ids: string[];
     errors?: Array<{ index: number; error: string }>;
   }> {
+    this.logger.log(`🚀 Starting batch ingestion of ${items.length} items`);
+    const startTime = Date.now();
+
     const feedback_ids: string[] = [];
     const errors: Array<{ index: number; error: string }> = [];
+    const processedItems: Array<{
+      index: number;
+      dto: CreateFeedbackItemDto;
+      customer: Customer | null;
+      category: Category | null;
+      sentiment: Sentiment;
+      frequencyCount: number;
+      tags: string[];
+    }> = [];
 
-    for (let i = 0; i < items.length; i++) {
-      try {
-        const feedback = await this.createOne(items[i]);
-        feedback_ids.push(feedback.id);
-      } catch (error) {
-        this.logger.error(`Error creating feedback at index ${i}`, error);
-        errors.push({ index: i, error: error.message });
+    try {
+      // STAGE 0: Normalize payloads (convert different shapes to internal format)
+      this.logger.log('🔄 Stage 0: Normalizing payloads from different sources');
+      const normalizedItems: CreateFeedbackItemDto[] = [];
+      for (let i = 0; i < items.length; i++) {
+        try {
+          const normalized = this.normalizeFeedbackPayload(items[i]);
+          normalizedItems.push(normalized);
+        } catch (error) {
+          this.logger.error(`Error normalizing item at index ${i}`, error);
+          errors.push({ index: i, error: `Normalization failed: ${error.message}` });
+        }
       }
-    }
 
-    return {
-      success: true,
-      ingested_count: feedback_ids.length,
-      failed_count: errors.length,
-      feedback_ids,
-      errors: errors.length > 0 ? errors : undefined,
-    };
+      // STAGE 1: Get all categories once
+      this.logger.log('📊 Stage 1: Fetching categories');
+      const categories = await this.getAllCategories();
+
+      // STAGE 2: Process each item - customer, categorization, sentiment, frequency
+      this.logger.log('👥 Stage 2: Processing customers, categorization, and frequency');
+      for (let i = 0; i < normalizedItems.length; i++) {
+        try {
+          const dto = normalizedItems[i];
+
+          // Get or create customer
+          let customer: Customer | null = null;
+          if (dto.customer_email) {
+            customer = await this.getOrCreateCustomer(
+              dto.customer_email,
+              dto.customer_tier || CustomerTier.FREE,
+              dto.customer_company,
+            );
+          }
+
+          // Categorize
+          const category = this.categorizationService.categorize(
+            dto.content,
+            categories,
+          );
+
+          // Determine sentiment
+          const sentiment = this.categorizationService.determineSentiment(
+            dto.content,
+            category?.type,
+          );
+
+          // Check frequency
+          const frequencyCount = await this.getSimilarFeedbackCount(
+            dto.content,
+            category?.id,
+          );
+
+          // Extract tags
+          const tags = this.categorizationService.extractTags(
+            dto.content,
+            dto.metadata,
+          );
+
+          processedItems.push({
+            index: i,
+            dto,
+            customer,
+            category,
+            sentiment,
+            frequencyCount,
+            tags,
+          });
+        } catch (error) {
+          this.logger.error(`Error processing item at index ${i}`, error);
+          errors.push({ index: i, error: error.message });
+        }
+      }
+
+      // STAGE 3: Calculate urgency scores in batches of 10
+      this.logger.log(`🤖 Stage 3: Calculating urgency scores (batches of 10)`);
+      const BATCH_SIZE = 10;
+      const urgencyResults: Map<number, UrgencyAnalysisResult> = new Map();
+
+      for (let i = 0; i < processedItems.length; i += BATCH_SIZE) {
+        const batch = processedItems.slice(i, Math.min(i + BATCH_SIZE, processedItems.length));
+
+        try {
+          const batchResults = await this.prioritizationService.calculateUrgencyBatch(
+            batch.map(item => ({
+              feedback_content: item.dto.content,
+              customer_tier: item.customer?.tier,
+              category: item.category?.name,
+              frequency_count: item.frequencyCount,
+              created_at: new Date(),
+              source: item.dto.source || FeedbackSource.SUPPORT, // Fallback to SUPPORT if not set
+              metadata: item.dto.metadata || {},
+            }))
+          );
+
+          // Map results back to original indices
+          batchResults.forEach((result, batchIndex) => {
+            urgencyResults.set(batch[batchIndex].index, result);
+          });
+        } catch (error) {
+          this.logger.error(`Error calculating urgency for batch ${i / BATCH_SIZE}`, error);
+          // Add errors for all items in this batch
+          batch.forEach(item => {
+            errors.push({ index: item.index, error: `Urgency calculation failed: ${error.message}` });
+          });
+        }
+      }
+
+      // STAGE 4: Batch insert feedback into database
+      this.logger.log('💾 Stage 4: Batch inserting feedback');
+      const feedbackToInsert = processedItems
+        .filter(item => urgencyResults.has(item.index))
+        .map(item => {
+          const urgency = urgencyResults.get(item.index)!;
+          return {
+            customer_id: item.customer?.id || null,
+            category_id: item.category?.id || null,
+            source: item.dto.source,
+            content: item.dto.content,
+            urgency_score: urgency.urgency_score,
+            urgency_reasoning: urgency.reasoning,
+            sentiment: item.sentiment,
+            status: FeedbackStatus.NEW,
+            frequency_count: item.frequencyCount,
+            metadata: item.dto.metadata || {},
+          };
+        });
+
+      if (feedbackToInsert.length > 0) {
+        const { data: feedbackData, error: insertError } = await this.supabase
+          .from('feedback')
+          .insert(feedbackToInsert)
+          .select();
+
+        if (insertError) {
+          this.logger.error('Error batch inserting feedback', insertError);
+          throw new Error(`Failed to batch insert feedback: ${insertError.message}`);
+        }
+
+        if (feedbackData) {
+          feedback_ids.push(...feedbackData.map(f => f.id));
+
+          // STAGE 5: Batch insert tags
+          this.logger.log('🏷️  Stage 5: Batch inserting tags');
+          const allTags: Array<{ feedback_id: string; tag: string }> = [];
+
+          feedbackData.forEach((feedback, idx) => {
+            const itemIndex = processedItems.findIndex(
+              (item, i) => urgencyResults.has(item.index) && i === idx
+            );
+
+            if (itemIndex !== -1) {
+              const tags = processedItems[itemIndex].tags;
+              tags.forEach(tag => {
+                allTags.push({ feedback_id: feedback.id, tag });
+              });
+            }
+          });
+
+          if (allTags.length > 0) {
+            const { error: tagsError } = await this.supabase
+              .from('feedback_tags')
+              .insert(allTags);
+
+            if (tagsError) {
+              this.logger.warn('Error batch inserting tags', tagsError);
+            }
+          }
+        }
+      }
+
+      const duration = Date.now() - startTime;
+      this.logger.log(
+        `✅ Batch ingestion complete: ${feedback_ids.length} succeeded, ${errors.length} failed (${duration}ms)`
+      );
+
+      return {
+        success: true,
+        ingested_count: feedback_ids.length,
+        failed_count: errors.length,
+        feedback_ids,
+        errors: errors.length > 0 ? errors : undefined,
+      };
+    } catch (error) {
+      this.logger.error('❌ Critical error in batch ingestion', error);
+      throw error;
+    }
   }
 
   /**
@@ -98,7 +289,7 @@ export class FeedbackService {
       category: category?.name,
       frequency_count: frequencyCount,
       created_at: new Date(),
-      source: dto.source,
+      source: dto.source || FeedbackSource.SUPPORT, // Fallback to SUPPORT if not set
       metadata: dto.metadata || {},
     });
 
@@ -475,5 +666,93 @@ export class FeedbackService {
     }
 
     return (data || []).map((item) => item.tag);
+  }
+
+  /**
+   * Normalize source-specific payload to internal CreateFeedbackItemDto
+   * This accepts different payload shapes based on the source and normalizes them
+   */
+  normalizeFeedbackPayload(
+    payload: any,
+  ): CreateFeedbackItemDto {
+    // If it's already in the standard format with 'source' field, return as-is
+    if (payload.source) {
+      return payload as CreateFeedbackItemDto;
+    }
+
+    // Detect the source based on unique fields and normalize
+    if ('ticket_id' in payload && 'channel' in payload) {
+      // Support Ticket
+      const ticket = payload as SupportTicketDto;
+      return {
+        source: FeedbackSource.SUPPORT,
+        content: ticket.content,
+        customer_email: ticket.customer_email,
+        customer_tier: ticket.customer_tier,
+        customer_company: ticket.customer_company,
+        metadata: {
+          ticket_id: ticket.ticket_id,
+          channel: ticket.channel,
+          assigned_agent: ticket.assigned_agent,
+          resolution_time: ticket.resolution_time,
+        },
+      };
+    }
+
+    if ('nps_score' in payload) {
+      // NPS Survey
+      const nps = payload as NPSSurveyDto;
+      return {
+        source: FeedbackSource.NPS,
+        content: nps.content,
+        customer_email: nps.customer_email,
+        customer_tier: nps.customer_tier,
+        customer_company: nps.customer_company,
+        metadata: {
+          nps_score: nps.nps_score,
+          survey_campaign: nps.survey_campaign,
+          response_date: nps.response_date,
+        },
+      };
+    }
+
+    if ('store' in payload && 'star_rating' in payload && 'app_version' in payload) {
+      // App Store Review
+      const review = payload as AppStoreReviewDto;
+      return {
+        source: FeedbackSource.APPSTORE,
+        content: review.content,
+        customer_email: review.customer_email,
+        customer_tier: review.customer_tier,
+        metadata: {
+          store: review.store,
+          app_version: review.app_version,
+          star_rating: review.star_rating,
+          reviewer_username: review.reviewer_username,
+        },
+      };
+    }
+
+    if ('platform' in payload && 'author_handle' in payload) {
+      // Social Mention
+      const social = payload as SocialMentionDto;
+      return {
+        source: FeedbackSource.SOCIAL,
+        content: social.content,
+        customer_email: social.customer_email,
+        customer_tier: social.customer_tier,
+        metadata: {
+          platform: social.platform,
+          author_handle: social.author_handle,
+          engagement_count: social.engagement_count,
+          post_url: social.post_url,
+        },
+      };
+    }
+
+    // Fallback: if we can't detect the source, throw an error
+    throw new Error(
+      'Unable to determine feedback source from payload. Please include a "source" field or use source-specific fields.'
+    );
   }
 }

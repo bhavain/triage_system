@@ -12,6 +12,76 @@ export class PrioritizationService {
   private readonly logger = new Logger(PrioritizationService.name);
 
   /**
+   * Calculate urgency scores for multiple feedback items in a single LLM call
+   * @param inputs Array of feedback data for batch analysis
+   * @returns Array of urgency analysis results
+   */
+  async calculateUrgencyBatch(
+    inputs: UrgencyAnalysisInput[],
+  ): Promise<UrgencyAnalysisResult[]> {
+    if (inputs.length === 0) {
+      return [];
+    }
+
+    try {
+      const prompt = this.buildBatchUrgencyPrompt(inputs);
+
+      this.logger.log(`🤖 Calling OpenAI GPT-4 for batch urgency analysis (${inputs.length} items)...`);
+      const response = await openai().chat.completions.create({
+        model: 'gpt-4-turbo-preview',
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are a customer feedback triage expert. Analyze multiple feedback items and assign urgency scores based on multiple factors. Always respond with valid JSON array.',
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.3,
+        max_tokens: 500 * inputs.length, // Scale tokens with number of items
+      });
+
+      const content = response.choices[0]?.message?.content;
+
+      if (!content) {
+        this.logger.warn('OpenAI returned empty response, using fallback for all items');
+        return inputs.map(input => this.fallbackUrgencyCalculation(input));
+      }
+
+      const result = JSON.parse(content) as { results: UrgencyAnalysisResult[] };
+
+      // Validate results
+      if (!result.results || !Array.isArray(result.results) || result.results.length !== inputs.length) {
+        this.logger.warn(`Invalid batch response from OpenAI (expected ${inputs.length} results), using fallback`);
+        return inputs.map(input => this.fallbackUrgencyCalculation(input));
+      }
+
+      // Validate each result
+      const validatedResults = result.results.map((res, idx) => {
+        if (
+          typeof res.urgency_score !== 'number' ||
+          res.urgency_score < 0 ||
+          res.urgency_score > 100
+        ) {
+          this.logger.warn(`Invalid urgency score for item ${idx}, using fallback`);
+          return this.fallbackUrgencyCalculation(inputs[idx]);
+        }
+        return res;
+      });
+
+      this.logger.log(`✅ OpenAI returned ${validatedResults.length} urgency scores`);
+      return validatedResults;
+    } catch (error) {
+      this.logger.error(`❌ Error calculating batch urgency with OpenAI, using fallback`, error.message);
+      return inputs.map(input => this.fallbackUrgencyCalculation(input));
+    }
+  }
+
+  /**
    * Calculate urgency score using OpenAI LLM
    * @param input Feedback data and context for analysis
    * @returns Urgency analysis result with score and reasoning
@@ -70,6 +140,86 @@ export class PrioritizationService {
       // Fallback to rule-based calculation
       return this.fallbackUrgencyCalculation(input);
     }
+  }
+
+  /**
+   * Build the prompt for batch OpenAI urgency analysis
+   * @param inputs Array of feedback contexts
+   * @returns Formatted batch prompt string
+   */
+  private buildBatchUrgencyPrompt(inputs: UrgencyAnalysisInput[]): string {
+    const feedbackItems = inputs.map((input, idx) => {
+      const timeAgo = this.getTimeAgo(input.created_at);
+      const customerTierLabel = input.customer_tier || 'unknown';
+      const categoryLabel = input.category || 'uncategorized';
+
+      let metadataInfo = '';
+      if (input.metadata) {
+        if ('nps_score' in input.metadata) {
+          metadataInfo += `\n  - NPS Score: ${input.metadata.nps_score}/10`;
+        }
+        if ('star_rating' in input.metadata) {
+          metadataInfo += `\n  - Star Rating: ${input.metadata.star_rating}/5`;
+        }
+        if ('channel' in input.metadata) {
+          metadataInfo += `\n  - Channel: ${input.metadata.channel}`;
+        }
+      }
+
+      return `FEEDBACK #${idx + 1}:
+- Content: "${input.feedback_content}"
+- Source: ${input.source}
+- Customer Tier: ${customerTierLabel}
+- Category: ${categoryLabel}
+- Similar reports in last 30 days: ${input.frequency_count}${metadataInfo}
+- Received: ${timeAgo}`;
+    }).join('\n\n');
+
+    return `You are a customer feedback triage assistant. Analyze the following ${inputs.length} feedback items and assign urgency scores (0-100) to each based on these criteria:
+
+${feedbackItems}
+
+SCORING GUIDELINES (apply to each feedback item):
+- Customer Value (30%): enterprise=30pts, pro=20pts, free=10pts, unknown=5pts
+- Severity (25%):
+  * Crashes, data loss, security issues: 25pts
+  * Payment/checkout blocking issues: 20pts
+  * Major feature broken: 15pts
+  * UX degradation: 10pts
+  * Cosmetic issues: 5pts
+- Frequency (20%):
+  * 10+ similar reports: 20pts
+  * 5-9 reports: 15pts
+  * 2-4 reports: 10pts
+  * 1 report: 5pts
+- Recency (15%):
+  * Last 24h: 15pts
+  * Last 3 days: 10pts
+  * Last week: 5pts
+  * Older: 2pts
+- Business Impact (10%):
+  * Revenue-affecting (payment, billing, checkout): 10pts
+  * Onboarding-affecting (signup, login, first-time experience): 7pts
+  * Core feature: 5pts
+  * Nice-to-have: 2pts
+
+Consider:
+- Low NPS scores (0-6) or low star ratings (1-2) indicate higher urgency
+- Multiple users reporting the same issue increases urgency
+- Issues affecting enterprise customers are more urgent
+- Blocking issues (cannot proceed) are more urgent than non-blocking
+
+OUTPUT FORMAT (JSON only, no other text):
+{
+  "results": [
+    {
+      "urgency_score": <number 0-100>,
+      "reasoning": "<2-3 sentence explanation>",
+      "recommended_action": "<immediate|same_day|this_week|backlog>"
+    },
+    ... (one object for each feedback item in order)
+  ]
+}`;
   }
 
   /**
