@@ -2,7 +2,6 @@ import {
   Controller,
   Get,
   Post,
-  Patch,
   Body,
   Param,
   Query,
@@ -16,7 +15,6 @@ import {
   CreateFeedbackItemDto,
 } from './dto/create-feedback.dto';
 import { QueryFeedbackDto } from './dto/query-feedback.dto';
-import { UpdateFeedbackDto } from './dto/update-feedback.dto';
 
 @Controller('api/feedback')
 export class FeedbackController {
@@ -25,7 +23,7 @@ export class FeedbackController {
   @Post('batch')
   @HttpCode(HttpStatus.OK)
   async createBatch(
-    @Body(ValidationPipe) dto: BatchCreateFeedbackDto,
+    @Body(new ValidationPipe({ whitelist: false, forbidNonWhitelisted: false })) dto: BatchCreateFeedbackDto,
   ) {
     return this.feedbackService.createBatch(dto.items);
   }
@@ -38,16 +36,5 @@ export class FeedbackController {
   @Get(':id')
   async findOne(@Param('id') id: string) {
     return this.feedbackService.findOne(id);
-  }
-
-  @Patch(':id')
-  async update(
-    @Param('id') id: string,
-    @Body(ValidationPipe) dto: UpdateFeedbackDto,
-  ) {
-    return {
-      success: true,
-      feedback: await this.feedbackService.update(id, dto),
-    };
   }
 }

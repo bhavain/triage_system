@@ -58,20 +58,6 @@ class ApiService {
     return this.fetch<Feedback>(`/api/feedback/${id}`);
   }
 
-  async updateFeedback(
-    id: string,
-    data: {
-      status?: string;
-      assigned_to?: string;
-      notes?: string;
-    }
-  ): Promise<{ success: boolean; feedback: Feedback }> {
-    return this.fetch(`/api/feedback/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    });
-  }
-
   // Insights endpoints
   async getUrgentQueue(params?: {
     min_urgency?: number;
