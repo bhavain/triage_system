@@ -57,31 +57,31 @@ Companies receive customer feedback from multiple sources (support tickets, NPS 
          └─────────────────┘
 ```
 
-## 📊 Key Features
+## 📊 Key Features Implemented
 
 ### **Backend (NestJS + Supabase + OpenAI)**
-- ✅ Complete REST API with 7 endpoints
-- ✅ PostgreSQL schema with performance indexes
-- ✅ LLM-powered urgency scoring (0-100)
-- ✅ Keyword-based categorization (5 categories)
-- ✅ Frequency detection for trending issues
-- ✅ Flexible JSONB metadata storage
-- ✅ 100 realistic seed data items
+- ✅ **Complete REST API** with 7 endpoints (feedback, insights)
+- ✅ **PostgreSQL schema** with performance indexes on urgency_score, created_at, customer_id
+- ✅ **LLM-powered urgency scoring** (0-100) with GPT-4 + rule-based fallback
+- ✅ **Keyword-based categorization** into 5 categories (Bug, Feature, Complaint, Praise, Question)
+- ✅ **Frequency detection** for trending issues using content similarity
+- ✅ **Multi-stage processing pipeline** with batch OpenAI calls (10 items per batch)
+- ✅ **Sentiment analysis** (positive/neutral/negative)
+- ✅ **Customer tier prioritization** (Enterprise > Pro > Free)
 
-### **Frontend (React + TypeScript + Tailwind)**
-- ✅ Urgent Queue dashboard (PM morning triage view)
-- ✅ Real-time urgency badges (Critical/High/Medium/Low)
-- ✅ AI reasoning display for each score
-- ✅ Customer tier indicators (Enterprise/Pro/Free)
-- ✅ Frequency indicators for recurring issues
-- ✅ Responsive design with Tailwind CSS
+### **Frontend (React + TypeScript + Tailwind + Recharts)**
+- ✅ **Urgent Queue dashboard** (PM morning triage view) - 7 high-priority items
+- ✅ **Volume Analysis dashboard** (Support view) - trends, charts, category breakdown
+- ✅ **Bug Search dashboard** (Engineering view) - advanced filters, pagination (50 of 151 results)
+- ✅ **Executive Summary dashboard** (Executive view) - KPIs, sentiment, critical issues
 
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Node.js 18+
-- Supabase account
-- OpenAI API key
+- Node.js 20+
+- npm or yarn
+- Supabase account (free tier works)
+- OpenAI API key with GPT-4 access
 
 ### 1. Clone & Setup
 
@@ -97,16 +97,41 @@ npm install
 
 # Configure environment
 cp .env.example .env
-# Edit .env with your Supabase and OpenAI credentials
+```
 
-# Run SQL migration in Supabase dashboard
-# File: src/database/migrations/001_initial_schema.sql
+Edit `.env` with your credentials:
+```bash
+# Supabase Configuration
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your-anon-key
 
-# Start backend
+# OpenAI Configuration
+OPENAI_API_KEY=sk-your-api-key
+
+# Server Configuration
+PORT=3000
+NODE_ENV=development
+```
+
+**Run Database Migration:**
+
+1. Go to your Supabase dashboard → SQL Editor
+2. Copy the contents of `backend/src/database/migrations/001_initial_schema.sql`
+3. Paste and run the SQL migration
+4. Verify tables created: `customers`, `categories`, `feedback`, `feedback_tags`
+
+**Start Backend:**
+```bash
 npm run start:dev
 ```
 
 Backend runs at `http://localhost:3000`
+
+**Verify Backend:**
+```bash
+curl http://localhost:3000
+# Should return: {"message":"Customer Feedback Triage System API","version":"1.0.0"}
+```
 
 ### 3. Frontend Setup
 
@@ -114,49 +139,58 @@ Backend runs at `http://localhost:3000`
 cd ../frontend
 npm install
 
+# Configure API URL (usually no changes needed for local dev)
+# Edit .env if needed:
+echo "VITE_API_URL=http://localhost:3000" > .env
+
 # Start frontend
 npm run dev
 ```
 
 Frontend runs at `http://localhost:5173`
 
-### 4. Seed Data (Optional but Recommended)
+### 4. Seed Data
 
-**Easy way - Use the seed script:**
+**Recommended - Use the comprehensive seed script:**
 ```bash
-cd /Users/bhavainshah/Documents/codespace/triage_system
-./seed-feedback-simple.sh
+cd backend
+npx tsx scripts/seed-via-api.ts
 ```
 
-**Or with more verbose output:**
-```bash
-./seed-feedback.sh  # Requires jq installed
-```
+This seeds **43 realistic feedback items** including:
+- **15 Support Tickets**: Critical bugs, feature requests, questions (various severities)
+- **11 NPS Surveys**: Range of scores (1-10) with detailed feedback
+- **9 App Store Reviews**: iOS and Android reviews with star ratings (1-5)
+- **8 Social Mentions**: Twitter, Reddit, LinkedIn posts
+- **Coverage**: All customer tiers (Enterprise, Pro, Free)
+- **Demonstrates**: Frequency detection, urgency scoring, sentiment analysis
 
-This will seed:
-- Critical bugs (payment failures, crashes)
-- Similar crash reports (shows frequency detection)
-- Feature requests (dark mode, bulk actions)
-- Positive feedback and complaints
-- Support questions
-
-**Manual way - Use curl:**
+**Alternative - Manual API Testing:**
 ```bash
 curl -X POST http://localhost:3000/api/feedback/batch \
   -H "Content-Type: application/json" \
   -d '{
     "items": [
       {
-        "source": "support",
-        "content": "Payment processing fails with error 500",
+        "content": "CRITICAL: Payment gateway is down! All transactions failing.",
         "customer_email": "cto@acme.com",
         "customer_tier": "enterprise",
         "customer_company": "Acme Corp",
-        "metadata": {"ticket_id": "TICKET-001", "channel": "email"}
+        "ticket_id": "TICK-001",
+        "channel": "email"
       }
     ]
   }'
 ```
+
+### 5. Explore the Dashboard
+
+Visit `http://localhost:5173` and explore:
+
+1. **🚨 Urgent Queue (PM View)**: High-priority items requiring immediate attention
+2. **📊 Volume Analysis (Support View)**: Feedback trends and category distribution
+3. **🔍 Bug Search (Engineering View)**: Advanced filtering and search
+4. **📈 Executive Summary (Executive View)**: High-level KPIs and insights
 
 ## 📚 Documentation
 
@@ -197,48 +231,288 @@ Visit `http://localhost:5173` to see the urgent queue with:
 - `GET /api/insights/trends` - Volume analysis and trends
 - `GET /api/insights/summary` - Executive summary with KPIs
 
-## 🎨 Design Decisions
+## 🎨 API Design Decisions
 
-### **Product-Minded Data Model**
-- `customers` table with tier info (enterprise/pro/free)
-- `categories` table with keyword arrays for matching
-- `feedback` table with JSONB metadata for flexibility
-- `feedback_tags` for flexible categorization
+### **1. Flexible Batch Ingestion Endpoint**
 
-### **LLM Prioritization**
-- **Why GPT-4**: Context-aware analysis beats simple rules
-- **Fallback**: Rule-based scoring ensures reliability
-- **Explainability**: Every score includes reasoning for trust
+**Decision**: Single `POST /api/feedback/batch` endpoint handles all feedback sources
 
-### **Performance Optimization**
-- Indexes on `urgency_score`, `created_at`, `customer_id`
-- Full-text search on content
-- Denormalized `frequency_count` for faster queries
+**Rationale**:
+- **Payload Normalization**: Different sources have different shapes (NPS has `nps_score`, App Store has `star_rating`, Support has `ticket_id`). Rather than forcing a rigid schema, we use a flexible approach where source-specific fields are automatically detected and normalized.
+- **JSONB Metadata**: All source-specific data is preserved in a `metadata` JSONB column, allowing backward compatibility when adding new sources.
+- **Batch Processing**: Processing 10-100 items at once is more efficient than individual requests, especially for OpenAI API calls.
 
-### **MVP Focus**
-- **Urgent Queue**: Most critical view for PM triage
-- **Simple UI**: Clean, focused dashboard over complex charts
-- **Extensibility**: Architecture ready for trends, search, summary views
+**Example Payload Shapes**:
+```javascript
+// Support Ticket
+{
+  "content": "Payment gateway down",
+  "ticket_id": "TICK-001",
+  "channel": "email",
+  "customer_email": "ceo@acme.com",
+  "customer_tier": "enterprise"
+}
 
-## 🔮 Future Enhancements
+// NPS Survey
+{
+  "content": "Love the product!",
+  "nps_score": 9,
+  "survey_campaign": "Q1-2024",
+  "customer_email": "user@company.com"
+}
 
-### Short-term
-- [ ] Trends View with volume charts
-- [ ] Bug Search with full-text filtering
-- [ ] Executive Summary dashboard
-- [ ] Feedback detail modal with similar items
+// App Store Review
+{
+  "content": "App crashes on startup",
+  "store": "ios",
+  "star_rating": 1,
+  "app_version": "4.1.0",
+  "reviewer_username": "angry_user"
+}
+```
 
-### Mid-term
-- [ ] Real-time updates (WebSockets)
-- [ ] Status workflow (new → reviewed → assigned → resolved)
-- [ ] Email notifications for critical issues
-- [ ] User authentication (Supabase Auth)
+### **2. Multi-Stage Processing Pipeline**
 
-### Long-term
-- [ ] ML-based duplicate detection (embeddings)
-- [ ] Custom dashboards (drag-and-drop)
-- [ ] Direct integrations (Zendesk, Intercom webhooks)
-- [ ] Public roadmap (like Canny)
+**Decision**: Feedback processing happens in 5 sequential stages
+
+**Pipeline**:
+1. **Stage 0: Payload Normalization** - Detect source type, extract metadata
+2. **Stage 1: Category Fetching** - Load category keywords for matching
+3. **Stage 2: Customer + Categorization** - Upsert customer, match categories, detect similar feedback
+4. **Stage 3: Urgency Scoring** - Batch call to OpenAI GPT-4 (10 items at a time)
+5. **Stage 4-5: Persistence** - Bulk insert feedback and tags
+
+**Rationale**:
+- **Batching**: OpenAI calls are expensive and slow. Batching 10 items reduces API calls by 10x and costs significantly.
+- **Parallel Processing**: Within each stage, independent operations run in parallel (Promise.all).
+- **Observability**: Each stage logs progress, making debugging easy.
+- **Error Isolation**: Failures in one stage don't crash the entire batch.
+
+### **3. Frequency Detection via Content Similarity**
+
+**Decision**: Use fuzzy string matching to detect similar feedback
+
+**Implementation**:
+```typescript
+// Check last 30 days for similar content
+const similar = await supabase
+  .from('feedback')
+  .select('content')
+  .gte('created_at', thirtyDaysAgo)
+  .ilike('content', `%${keywords}%`);
+```
+
+**Rationale**:
+- **Simple & Fast**: PostgreSQL ILIKE with keyword extraction works well for MVP.
+- **Good Enough**: Detects exact duplicates and close matches without complex ML.
+- **Future-Ready**: Can upgrade to embedding-based similarity (pgvector) later.
+
+**Alternative Considered**: Semantic similarity with embeddings (rejected for MVP due to complexity).
+
+### **4. Hybrid Urgency Scoring (LLM + Rules)**
+
+**Decision**: GPT-4 primary, rule-based fallback
+
+**LLM Scoring**:
+```typescript
+const prompt = `Analyze urgency (0-100) based on:
+- Customer Value: Enterprise(30) > Pro(20) > Free(10)
+- Severity: Critical(25) > Major(15) > Minor(5)
+- Frequency: Multiple reports add urgency
+- Recency: Recent feedback is more urgent
+- Business Impact: Revenue, security, compliance`;
+```
+
+**Fallback Scoring** (when OpenAI fails):
+```typescript
+score = customerTierScore + severityScore + frequencyScore + recencyScore + businessImpactScore
+```
+
+**Rationale**:
+- **LLM Advantages**: Context-aware, nuanced reasoning, handles edge cases.
+- **Reliability**: System works even if OpenAI is down or rate-limited.
+- **Cost Control**: Batch processing reduces API costs by 10x.
+- **Explainability**: Every score includes human-readable reasoning.
+
+### **5. RESTful API Design**
+
+**Endpoints**:
+- `POST /api/feedback/batch` - Ingest feedback (idempotent via deduplication)
+- `GET /api/feedback` - List with pagination, filtering, sorting
+- `GET /api/feedback/:id` - Get single feedback with relationships
+- `GET /api/insights/urgent` - Urgent queue (min_urgency=70, last 24h)
+- `GET /api/insights/trends` - Volume trends, category distribution
+- `GET /api/insights/summary` - Executive KPIs
+
+**Design Principles**:
+- **Resource-oriented**: Nouns for endpoints (`/feedback`, `/insights`)
+- **Standard HTTP verbs**: GET, POST
+- **Pagination**: `page`, `limit` query params
+- **Filtering**: Query params for filters (`min_urgency`, `category`, `tier`)
+- **Consistent responses**: `{ data: [...], pagination: {...} }`
+
+**What I'd Change**: Add `PUT /api/feedback/:id/status` for status transitions with validation.
+
+## 🎯 Approach to Example Scenarios
+
+### **Scenario 1: PM Morning Triage**
+
+**User Story**: "As a PM, I start my day checking the urgent queue to see what needs immediate attention."
+
+**Implementation**:
+- **Urgent Queue Dashboard** (`/api/insights/urgent`)
+  - Filters: `min_urgency >= 70`, `created_at >= last 24 hours`
+  - Sorting: Urgency score descending
+  - Display: Summary cards (Total Urgent, Critical 90+, High 70-89)
+
+**Key Features**:
+- **AI Reasoning Badges**: Each item shows WHY it's urgent (e.g., "enterprise customer, revenue-affecting, 3 similar reports")
+- **Frequency Indicators**: "3 similar reports" badge alerts PM to trending issues
+- **Customer Context**: Tier badge (Enterprise/Pro/Free) and company name immediately visible
+- **Action-Oriented**: "View More" button shows full context and similar feedback
+
+**Real Data Example**:
+```
+CRITICAL (85) - ENTERPRISE - Bug Report
+"Payment gateway down! All transactions failing with 503 errors."
+→ AI Analysis: "Enterprise customer, revenue-affecting issue, 3 similar reports"
+→ 3 similar reports | sarah.chen@techcorp.com | 12/18/2025 4:20 PM
+```
+
+### **Scenario 2: Support Team Volume Analysis**
+
+**User Story**: "As a support lead, I want to understand what's driving ticket volume this week."
+
+**Implementation**:
+- **Volume Analysis Dashboard** (`/api/insights/trends`)
+  - Time-based filters: Day, Week, Month, Quarter
+  - Charts: Volume over time, category distribution, feedback by source
+  - Tables: Category breakdown with trends
+
+**Key Features**:
+- **Trend Detection**: Percentage change vs previous period (↑ 530.8%)
+- **Category Distribution**: Visual breakdown showing Bug Report (20%), Feature Request (12%), etc.
+- **Source Analysis**: Bar chart showing support (30), nps (11), appstore (9), social (8)
+- **Top Trending Issues**: Lists most frequent issues with counts
+
+**Insight Example**:
+```
+Total Volume: 82 (↑ 530.8% vs previous period)
+Top Issue: "uncategorized" - 26 reports
+Second: "Bug Report" - 16 reports (20%)
+```
+
+### **Scenario 3: Engineering Bug Search**
+
+**User Story**: "As an engineer, I want to search for all crash-related feedback from enterprise customers."
+
+**Implementation**:
+- **Bug Search & Analysis** (`/api/feedback` with filters)
+  - Search: Full-text search on content
+  - Filters: Category, Customer Tier, Min Urgency, Sort By
+  - Results: Paginated list (50 per page) with full context
+
+**Key Features**:
+- **Advanced Filtering**: Category (Bug Report), Tier (Enterprise), Min Urgency (Critical 90+)
+- **Search**: Keyword search in feedback content
+- **Batch Results**: Shows 50 of 151 results with pagination
+- **AI Context**: Each result includes AI analysis explaining urgency
+
+**Query Example**:
+```
+Filters: Category=Bug Report, Tier=Enterprise, Min Urgency=70+
+Results: 30 items found
+Top Result: "Login system down for 3 hours" (Critical 100)
+```
+
+### **Scenario 4: Executive Summary**
+
+**User Story**: "As an executive, I want a high-level view of customer sentiment and critical issues."
+
+**Implementation**:
+- **Executive Summary** (`/api/insights/summary`)
+  - KPIs: Total Feedback, NPS Score, Response Rate, Avg Resolution Time
+  - Sentiment: Pie chart (Positive 25, Neutral 45, Negative 32)
+  - Critical Issues: Top 5 urgent items
+  - Insights: Most requested feature, biggest pain point, customer praise
+
+**Key Metrics**:
+```
+Total Feedback: 102
+NPS Score: 16 (→ Stable)
+Sentiment: 25 positive, 45 neutral, 32 negative
+
+Critical Issues:
+1. Payment gateway down (Urgent 100)
+2. Database migration failed (Urgent 98)
+3. API rate limiting broken (Urgent 92)
+
+Most Requested: "dashboard, board, showing"
+Biggest Pain Point: "performance, support, disappointed"
+```
+
+## What I'd Change With More Time
+
+### **1. Enhanced Duplicate Detection (Week 1)**
+
+**Current**: Simple keyword-based similarity using PostgreSQL ILIKE
+
+**Improvement**: Semantic similarity with embeddings
+
+**Benefits**:
+- Detects similar feedback even with different wording
+- "App crashes" matches "Application freezes" semantically
+- More accurate grouping of related issues
+
+
+### **2. Real-Time Updates (Week 1-2)**
+
+**Current**: Manual refresh to see new feedback
+
+**Improvement**: WebSocket connections for live updates
+
+**Benefits**:
+- PM sees urgent items appear instantly
+- No need to refresh dashboard
+- Toast notifications for critical items
+
+
+### **3. Status Workflow & Assignment (Week 2)**
+
+**Current**: All feedback is "new" status
+
+**Improvement**: Full workflow state machine
+
+**Benefits**:
+- Track feedback through its lifecycle
+- Assign to team members
+- SLA tracking (time in each status)
+- Analytics on resolution time
+
+
+### **4. Smart Routing Rules (Week 2-3)**
+
+**Current**: Manual review and assignment
+
+**Improvement**: Auto-routing based on rules
+
+**Benefits**:
+- Critical issues automatically assigned
+- Reduces manual triage time by 80%
+- Ensures right team sees right feedback
+
+
+### **5. Email & Slack Notifications (Week 3)**
+
+**Current**: Must check dashboard manually
+
+**Improvement**: Proactive notifications
+
+**Benefits**:
+- On-call team alerted instantly
+- No need to monitor dashboard
+- Reduces response time from hours to minutes
+
 
 ## 🛠️ Tech Stack
 
@@ -249,62 +523,11 @@ Visit `http://localhost:5173` to see the urgent queue with:
 | **AI/ML** | OpenAI GPT-4 | Best-in-class reasoning for prioritization |
 | **Frontend** | React + TypeScript | Component reusability, strong typing |
 | **Styling** | Tailwind CSS | Rapid prototyping, consistent design |
-| **Deployment** | Vercel | Seamless monorepo deployment |
+| **Charts** | Recharts | Beautiful, composable charts |
+| **Deployment** | Vercel + Supabase | Seamless monorepo deployment |
 
-## 📈 Assessment Criteria
-
-### ✅ Product Thinking (40%)
-- Data model captures decision-making signals (customer tier, frequency, recency)
-- Prioritization logic is explainable and reasonable
-- Dashboard addresses real PM workflow (morning triage)
-- Thoughtful trade-offs documented (LLM vs rules, normalized schema)
-
-### ✅ Backend Design (30%)
-- Clean REST API with 7 endpoints
-- Handles varied input formats (JSONB metadata)
-- Smart categorization (keyword matching + sentiment)
-- Extensible architecture (easy to add new sources/categories)
-
-### ✅ Frontend Execution (20%)
-- Clear information hierarchy (urgency → content → analysis)
-- Smooth interactions (hover states, loading states)
-- Genuinely useful (AI reasoning, frequency indicators)
-- Responsive design
-
-### ✅ Code Quality (10%)
-- TypeScript strict mode throughout
-- Modular, maintainable code structure
-- Error handling (fallback scoring, API errors)
-- Comments for complex logic (LLM prompts, scoring)
-
-## 🐛 Troubleshooting
-
-**Backend won't start**
-- Check `.env` has valid Supabase and OpenAI keys
-- Ensure SQL migration ran successfully
-- Verify Node.js 18+ installed
-
-**Frontend shows "Failed to load data"**
-- Ensure backend is running at `http://localhost:3000`
-- Check `.env` has `VITE_API_URL=http://localhost:3000`
-- Verify CORS is enabled in backend
-
-**"Missing OpenAI configuration"**
-- Add `OPENAI_API_KEY=sk-...` to backend `.env`
-- System will fallback to rule-based scoring if key is invalid
 
 ## 📄 License
 
 MIT
 
-## 🙏 Acknowledgments
-
-Built as an assessment project demonstrating:
-- Product-minded technical decisions
-- AI/LLM integration
-- Full-stack TypeScript development
-- Modern cloud-native architecture
-
----
-
-**Questions?** Check [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed design documentation.
