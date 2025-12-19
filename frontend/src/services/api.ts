@@ -6,7 +6,8 @@ import type {
   SummaryResponse,
 } from '../types/feedback';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+// Use relative URL in production (when deployed together), localhost in development
+const API_BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '' : 'http://localhost:3000');
 
 class ApiService {
   private async fetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
