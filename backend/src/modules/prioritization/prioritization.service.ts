@@ -42,7 +42,7 @@ export class PrioritizationService {
         ],
         response_format: { type: 'json_object' },
         temperature: 0.3,
-        max_tokens: 500 * inputs.length, // Scale tokens with number of items
+        max_tokens: Math.min(400 * inputs.length, 4000), // Scale tokens with number of items, cap at 4000
       });
 
       const content = response.choices[0]?.message?.content;
