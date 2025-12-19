@@ -135,15 +135,15 @@ export function VolumeAnalysis() {
           <ResponsiveContainer width="100%" height={300}>
             <PieChart>
               <Pie
-                data={trends.by_category}
+                data={trends.by_category as any}
                 dataKey="count"
                 nameKey="category"
                 cx="50%"
                 cy="50%"
                 outerRadius={100}
-                label={({ category, percent }) => `${category}: ${percent}%`}
+                label={(props: any) => `${props.category}: ${props.percent}%`}
               >
-                {trends.by_category.map((entry, index) => (
+                {trends.by_category.map((_entry, index) => (
                   <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                 ))}
               </Pie>
